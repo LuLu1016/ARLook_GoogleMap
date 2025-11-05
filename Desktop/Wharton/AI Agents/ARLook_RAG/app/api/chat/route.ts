@@ -1,0 +1,603 @@
+import { NextRequest, NextResponse } from 'next/server';
+import OpenAI from 'openai';
+import { Property, Message } from '@/types';
+import {
+  formatPropertiesForPrompt,
+  parseAIResponse,
+  filterPropertiesByFilters,
+} from '@/lib/openai';
+import { HybridRetriever } from '@/lib/retrieval';
+import { getAllProperties } from '@/lib/csv-loader';
+import { verifyAndFilterProperties, RAGMetrics } from '@/lib/rag-verification';
+import { RentalReasoningEngine, SearchContext } from '@/lib/reasoning-engine';
+import { ContextAwareAssistant } from '@/lib/context-aware';
+
+/**
+ * Get OpenAI API key from environment variables
+ */
+function getOpenAIApiKey(): string {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error('OPENAI_API_KEY is not configured in environment variables');
+  }
+  return apiKey;
+}
+
+/**
+ * Create system prompt for OpenAI with intent detection and next-step suggestions
+ */
+function createSystemPrompt(properties: Property[], conversationHistory: Message[] = []): string {
+  const propertiesText = formatPropertiesForPrompt(properties);
+  
+  // Analyze conversation context
+  const hasPreviousMessages = conversationHistory.length > 0;
+  const userMessages = conversationHistory.filter(m => m.role === 'user');
+  const lastUserMessage = userMessages[userMessages.length - 1]?.content || '';
+  
+  // Detect conversation stage
+  let conversationStage = 'initial';
+  let detectedIntent = '';
+  let suggestedNextSteps = '';
+  
+  if (!hasPreviousMessages) {
+    conversationStage = 'initial';
+    detectedIntent = 'User is starting their search';
+    suggestedNextSteps = 'Introduce yourself briefly, ask about their key priorities (budget, location, amenities), or show them some popular options';
+  } else if (lastUserMessage.toLowerCase().includes('wharton') || lastUserMessage.toLowerCase().includes('school')) {
+    conversationStage = 'location_focused';
+    detectedIntent = 'User is prioritizing location/proximity to Wharton';
+    suggestedNextSteps = 'Ask about walking distance preference, budget range, and must-have amenities';
+  } else if (lastUserMessage.toLowerCase().includes('price') || lastUserMessage.toLowerCase().includes('budget') || lastUserMessage.toLowerCase().includes('$')) {
+    conversationStage = 'budget_focused';
+    detectedIntent = 'User is prioritizing budget';
+    suggestedNextSteps = 'Ask about location flexibility, preferred amenities, and room type (studio/1b1b)';
+  } else if (lastUserMessage.toLowerCase().includes('laundry') || lastUserMessage.toLowerCase().includes('gym') || lastUserMessage.toLowerCase().includes('amenit')) {
+    conversationStage = 'amenity_focused';
+    detectedIntent = 'User is prioritizing specific amenities';
+    suggestedNextSteps = 'Ask about budget range, location preference, and if there are other amenities they need';
+  } else if (lastUserMessage.toLowerCase().includes('more') || lastUserMessage.toLowerCase().includes('other') || lastUserMessage.toLowerCase().includes('show')) {
+    conversationStage = 'exploring';
+    detectedIntent = 'User wants to see more options or explore further';
+    suggestedNextSteps = 'Offer alternative properties, suggest refining filters, or ask what specific aspect they want to explore';
+  } else if (lastUserMessage.toLowerCase().includes('compare') || lastUserMessage.toLowerCase().includes('difference')) {
+    conversationStage = 'comparing';
+    detectedIntent = 'User wants to compare properties';
+    suggestedNextSteps = 'Highlight key differences in price, location, amenities, or other factors';
+  } else {
+    conversationStage = 'refining';
+    detectedIntent = 'User is refining their search';
+    suggestedNextSteps = 'Acknowledge their refinement, provide updated results, and ask if they need any clarification';
+  }
+
+  return `You are ARLook, a professional rental consultant assistant specializing in University City, Philadelphia. Your core mission is to understand users' rental needs, intelligently match them with properties from the database, and guide them through their search journey with proactive suggestions.
+
+### Property Database
+${propertiesText}
+
+### Conversation Context
+Current Stage: ${conversationStage}
+Detected Intent: ${detectedIntent}
+Suggested Next Steps: ${suggestedNextSteps}
+${hasPreviousMessages ? `Previous messages: ${conversationHistory.slice(-3).map(m => `${m.role}: ${m.content.substring(0, 50)}...`).join(' | ')}` : 'This is the first message'}
+
+### Your Core Capabilities
+1. **Intent Detection**: Understand what the user is really looking for (budget, location, amenities, room type, lifestyle preferences)
+2. **Intelligent Matching**: Filter and rank properties from the database based on user needs
+3. **Proactive Guidance**: Anticipate user's next steps and provide helpful suggestions
+4. **Conversation Flow**: Guide users through a natural conversation journey from initial search to final decision
+
+### Response Structure (present naturally, no format markers)
+Your response MUST be complete and include ALL of the following:
+
+1. **Acknowledgment**: Briefly acknowledge what the user said or what you found
+   Example: "Based on your search for properties near Wharton, I found 3 excellent options..."
+
+2. **Property Recommendations** (CRITICAL - MUST list ALL properties you mention):
+   If you say "I found X properties" or "X excellent options", you MUST list ALL X properties.
+   For EACH property, you MUST include ALL of the following details COMPLETELY:
+   - Property name (full name)
+   - Complete address (full street address, city, state)
+   - Price per person and room type (e.g., $1850 per person, 1b1b)
+   - Walking distance to Wharton School (if available, e.g., "8 minutes walk")
+   - Key amenities (at least 3-4 amenities, comma-separated)
+   - Brief highlight (1 sentence describing unique feature)
+   
+   CRITICAL RULES:
+   - If you mention "3 options", list ALL 3 properties completely
+   - Do NOT stop mid-property-description
+   - Do NOT list only 1 property if you said there are multiple
+   - Each property should have: name, address, price, walking distance, amenities, highlight
+   - Complete ALL property details before moving to next steps
+
+3. **Next Step Suggestions** (CRITICAL - MUST include):
+   After presenting ALL properties, ALWAYS suggest 2-3 natural next steps based on:
+   - What the user might want to know next
+   - Common questions users ask at this stage
+   - Ways to refine or expand their search
+   
+   Examples:
+   - "Would you like to see more options in a different price range?"
+   - "I can help you compare these properties side by side if you'd like."
+   - "If you're interested in any of these, I can provide more details about the neighborhood or nearby amenities."
+   
+   DO NOT end your response abruptly. Always include next-step suggestions.
+
+4. **Data Tag**: At the very end, on a separate line, add JSON filter format (DO NOT mention this in your response):
+[DATA]{"filters": {"maxPrice": 2000, "amenities": ["In-unit laundry", "Gym"], "maxWalkingDistance": 10}}
+
+### Response Length Requirements
+- Your response should be comprehensive and detailed
+- Minimum length: At least 400-500 words for 3 properties
+- Include complete information for each property mentioned
+- Always end with helpful next-step suggestions
+- Do NOT truncate mid-sentence or mid-property-description
+- If you say "X properties", list ALL X properties completely
+
+### Response Validation Checklist
+Before ending your response, verify:
+- [ ] Did I mention a number of properties? (e.g., "3 options")
+- [ ] Did I list ALL of them completely?
+- [ ] Each property has: name, address, price, walking distance, amenities, highlight?
+- [ ] Did I include next-step suggestions?
+- [ ] Is my response complete and helpful?
+
+### Response Guidelines
+- Use natural, conversational English (or Chinese if user uses Chinese)
+- Do NOT use markdown formatting (no **, ###, -, etc.)
+- Do NOT use emoji
+- Be accurate, concise, and helpful
+- Be professional, friendly, and eager to help
+- If user needs are unclear, politely ask about key information (budget, room type, must-have amenities)
+- Always end with helpful next-step suggestions or questions
+
+### Critical Rules - Prevent Hallucinations
+- **Strict Constraint**: You can ONLY reference properties listed in the database above. NEVER invent or fabricate property information.
+- **Data Accuracy**: All prices, addresses, amenities mentioned must match the database exactly.
+- **If no matching properties**: Honestly tell the user, don't make up properties.
+- **Verification**: The system automatically verifies every property you mention exists in the database.
+- Must include [DATA] JSON object at the end for frontend map filtering
+- Filters in JSON should contain specific filter conditions
+- If user didn't specify certain conditions, infer reasonably from context
+- Always respond in the same language as the user (English or Chinese)
+
+### Intent Detection & Next Steps
+Based on the conversation stage and detected intent, proactively suggest:
+- **Initial Stage**: Ask about priorities, show popular options, explain your capabilities
+- **Location-Focused**: Ask about walking distance tolerance, budget flexibility, amenities needed
+- **Budget-Focused**: Ask about location flexibility, room type preference, must-have amenities
+- **Amenity-Focused**: Ask about budget range, location preference, other amenities
+- **Exploring**: Offer alternatives, suggest filter refinements, ask what to explore next
+- **Comparing**: Highlight differences, offer more comparison details, suggest visiting properties
+- **Refining**: Acknowledge refinement, provide updated results, ask for clarification`;
+}
+
+/**
+ * POST /api/chat
+ * Handle chat messages using OpenAI GPT-3.5-turbo
+ */
+export async function POST(request: NextRequest) {
+  try {
+    const body = await request.json();
+    const { message, conversationHistory } = body;
+
+    if (!message || typeof message !== 'string') {
+      return NextResponse.json(
+        { error: 'Message is required' },
+        { status: 400 }
+      );
+    }
+
+    // Check if OpenAI API key is configured
+    let openai: OpenAI | undefined;
+    try {
+      const apiKey = getOpenAIApiKey();
+      openai = new OpenAI({ apiKey });
+    } catch (error: any) {
+      console.error('OpenAI API key not configured:', error.message);
+      // Fallback to local filtering if OpenAI is not configured
+      return fallbackToLocalFiltering(message);
+    }
+
+    // Step 1: Initialize reasoning engine and context-aware assistant
+    const reasoningEngine = new RentalReasoningEngine(openai);
+    const contextAssistant = new ContextAwareAssistant();
+    
+    // Step 2: Clarify user needs (if needed)
+    const clarificationResult = await reasoningEngine.clarifyNeeds(
+      message,
+      conversationHistory || []
+    );
+    
+    // If clarification is needed, return clarification questions
+    if (clarificationResult.needsClarification && clarificationResult.clarificationQuestions) {
+      return NextResponse.json({
+        response: `To help you find the best match, I need a bit more information:\n\n${clarificationResult.clarificationQuestions.map((q, i) => `${i + 1}. ${q}`).join('\n')}\n\nPlease provide these details so I can tailor my recommendations.`,
+        properties: [],
+        count: 0,
+        needsClarification: true,
+      });
+    }
+    
+    // Use clarified query
+    const clarifiedQuery = clarificationResult.clarifiedQuery || message;
+    
+    // Step 3: Select search strategy
+    const searchStrategy = await reasoningEngine.selectSearchStrategy(clarifiedQuery);
+    
+    // Step 4: Use HybridRetriever to perform RAG retrieval
+    const retriever = new HybridRetriever();
+    const allProperties = getAllProperties();
+    const retrievalResult = await retriever.retrieve(clarifiedQuery, allProperties, openai);
+    
+    console.log('RAG Retrieval Result:', {
+      strategy: retrievalResult.strategy,
+      confidence: retrievalResult.confidence,
+      propertyCount: retrievalResult.properties.length,
+      searchStrategy,
+    });
+
+    // Step 5: Prepare conversation messages with retrieved properties
+    // Use retrieved properties instead of all properties for better context
+    const retrievedProperties = retrievalResult.properties.length > 0 
+      ? retrievalResult.properties 
+      : allProperties; // Fallback to all if retrieval returns empty
+    
+    const systemPrompt = createSystemPrompt(retrievedProperties, conversationHistory || []);
+    const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+      {
+        role: 'system',
+        content: systemPrompt,
+      },
+    ];
+
+    // Add conversation history (last 10 messages to avoid token limit)
+    if (conversationHistory && Array.isArray(conversationHistory)) {
+      const recentHistory = conversationHistory.slice(-10);
+      for (const msg of recentHistory) {
+        messages.push({
+          role: msg.role === 'user' ? 'user' : 'assistant',
+          content: msg.content,
+        });
+      }
+    }
+
+    // Add current user message
+    messages.push({
+      role: 'user',
+      content: message,
+    });
+
+    // Call OpenAI API with retry logic for incomplete responses
+    let aiResponse: string = '';
+    let finishReason: string | undefined;
+    let tokensUsed: number | undefined;
+    let retryCount = 0;
+    const maxRetries = 2;
+    
+    while (retryCount <= maxRetries) {
+      try {
+        const completion = await openai.chat.completions.create({
+          model: 'gpt-3.5-turbo',
+          messages,
+          temperature: 0.7,
+          max_tokens: 4000, // Increased to 4000 to ensure complete responses
+          stop: undefined, // Don't stop prematurely
+        });
+
+        const responseContent = completion.choices[0]?.message?.content || '';
+        finishReason = completion.choices[0]?.finish_reason;
+        tokensUsed = completion.usage?.total_tokens;
+        
+        if (!responseContent) {
+          throw new Error('Empty response from OpenAI');
+        }
+        
+        // Accumulate response if continuing
+        if (aiResponse) {
+          aiResponse += ' ' + responseContent; // Continue from where we left off
+        } else {
+          aiResponse = responseContent;
+        }
+        
+        // Check if response was truncated
+        if (finishReason === 'length') {
+          console.warn(`⚠️ Response was truncated (attempt ${retryCount + 1}/${maxRetries + 1})!`, {
+            responseLength: aiResponse.length,
+            tokensUsed,
+            completionTokens: completion.usage?.completion_tokens,
+          });
+          
+          // If truncated and we haven't retried yet, continue the conversation
+          if (retryCount < maxRetries) {
+            retryCount++;
+            // Add the incomplete response as assistant message and continue
+            messages.push({
+              role: 'assistant',
+              content: aiResponse,
+            });
+            messages.push({
+              role: 'user',
+              content: 'CRITICAL: Your response was incomplete. You mentioned multiple properties but only listed some. Please continue and list ALL remaining properties with complete details (full address, price, walking distance, amenities, highlight). Then add next-step suggestions. Do NOT stop until ALL properties are listed completely.',
+            });
+            continue; // Retry with continuation
+          }
+        }
+        
+        // Check if response mentions properties but doesn't list them all
+        const mentionedCountMatch = responseContent.match(/(\d+)\s*(?:excellent\s+)?(?:options?|properties?|matches?)/i);
+        const mentionedCount = mentionedCountMatch ? parseInt(mentionedCountMatch[1]) : null;
+        const propertyListPattern = /^\d+\.\s+/gm;
+        const listedProperties = (responseContent.match(propertyListPattern) || []).length;
+        
+        // If response mentions multiple properties but doesn't list all, and we haven't retried
+        if (mentionedCount !== null && listedProperties < mentionedCount && retryCount < maxRetries && finishReason !== 'length') {
+          console.warn(`⚠️ Response mentions ${mentionedCount} properties but only lists ${listedProperties}!`, {
+            mentionedCount,
+            listedProperties,
+            responseLength: aiResponse.length,
+          });
+          
+          retryCount++;
+          messages.push({
+            role: 'assistant',
+            content: aiResponse,
+          });
+          messages.push({
+            role: 'user',
+            content: `You mentioned ${mentionedCount} properties but only listed ${listedProperties}. Please continue and list ALL remaining properties (${mentionedCount - listedProperties} more) with complete details. Each property must include: name, full address, price per person, walking distance, amenities, and a highlight.`,
+          });
+          continue; // Retry to complete the list
+        }
+        
+        console.log('📨 OpenAI Response:', {
+          length: aiResponse.length,
+          finishReason,
+          tokensUsed,
+          completionTokens: completion.usage?.completion_tokens,
+          promptTokens: completion.usage?.prompt_tokens,
+          preview: aiResponse.substring(0, 200),
+        });
+        
+        break; // Success, exit retry loop
+      } catch (error: any) {
+        if (retryCount >= maxRetries) {
+          console.error('OpenAI API error after retries:', error);
+          // If we have partial response, use it; otherwise fallback
+          if (!aiResponse) {
+            return fallbackToLocalFiltering(message);
+          }
+          break; // Use partial response
+        }
+        retryCount++;
+        console.warn(`⚠️ OpenAI API error, retrying (${retryCount}/${maxRetries + 1})...`, error.message);
+        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second before retry
+      }
+    }
+    
+    // Ensure we have a response
+    if (!aiResponse) {
+      return fallbackToLocalFiltering(message);
+    }
+
+    // Parse and clean AI response
+    const { reply, filters } = parseAIResponse(aiResponse);
+    
+    // Validate response completeness - check if all mentioned properties are listed
+    const mentionedCountMatch = reply.match(/(\d+)\s*(?:excellent\s+)?(?:options?|properties?|matches?)/i);
+    const mentionedCount = mentionedCountMatch ? parseInt(mentionedCountMatch[1]) : null;
+    
+    // Count how many properties are actually listed in the response
+    const propertyListPattern = /^\d+\.\s+/gm;
+    const listedProperties = (reply.match(propertyListPattern) || []).length;
+    
+    // Check if response mentions a number but doesn't list all properties
+    if (mentionedCount !== null && listedProperties < mentionedCount) {
+      console.warn('⚠️ Response mentions multiple properties but only lists some!', {
+        mentionedCount,
+        listedProperties,
+        replyLength: reply.length,
+        finishReason,
+      });
+      
+      // If response was truncated and we haven't retried yet, continue
+      if (finishReason === 'length' && retryCount < maxRetries) {
+        // This should have been handled in the retry logic above
+        // But if we're here, we'll log a warning
+        console.warn('⚠️ Response incomplete - properties not fully listed');
+      }
+    }
+    
+    // Validate response completeness
+    if (reply.length < 100) {
+      console.warn('⚠️ Response seems too short!', {
+        replyLength: reply.length,
+        originalLength: aiResponse.length,
+        finishReason,
+      });
+    }
+    
+    // Check if response ends abruptly (doesn't end with proper punctuation)
+    const lastChar = reply.trim().slice(-1);
+    const endsProperly = ['.', '!', '?'].includes(lastChar);
+    
+    if (!endsProperly && finishReason === 'length') {
+      console.error('❌ Response was truncated and does not end properly!', {
+        replyLength: reply.length,
+        lastChars: reply.slice(-50),
+        finishReason,
+      });
+    }
+    
+    // Log full response for debugging
+    console.log('🔍 Full AI Response:', {
+      originalLength: aiResponse.length,
+      cleanedLength: reply.length,
+      finishReason,
+      preview: aiResponse.substring(0, 300),
+      endsWith: aiResponse.slice(-100),
+      hasDataTag: aiResponse.includes('[DATA]'),
+      replyPreview: reply.substring(0, 300),
+      replyEndsWith: reply.slice(-100),
+    });
+
+    // CRITICAL: Verify and filter properties to prevent hallucinations
+    const verificationResult = verifyAndFilterProperties(
+      reply,
+      retrievalResult.properties,
+      filters
+    );
+
+    // Log RAG metrics for monitoring
+    console.log('📊 RAG Metrics:', {
+      retrievalAccuracy: verificationResult.metrics.retrievalAccuracy.toFixed(2),
+      responseAccuracy: verificationResult.metrics.responseAccuracy.toFixed(2),
+      hallucinationScore: verificationResult.metrics.hallucinationScore.toFixed(2),
+      propertyMentioned: verificationResult.metrics.propertyMentionedCount,
+      propertyVerified: verificationResult.metrics.propertyVerifiedCount,
+      dataConsistency: verificationResult.metrics.dataConsistency.toFixed(2),
+      warnings: verificationResult.metrics.warnings,
+    });
+
+    // Warn if hallucinations detected
+    if (verificationResult.metrics.hallucinationScore > 0) {
+      console.warn('⚠️ Hallucination detected!', {
+        invalidMentions: verificationResult.metrics.warnings,
+        removedMentions: verificationResult.sanitizedResponse !== reply ? 'Response sanitized' : 'None',
+      });
+    }
+
+    // Filter properties based on filters from AI response
+    // Use verified properties as base, then apply AI filters if available
+    let filteredProperties: Property[] = verificationResult.verifiedProperties;
+    if (filters) {
+      // Handle both {"filters": {...}} and direct {...} formats
+      const actualFilters = (filters as any).filters || filters;
+      // Apply filters to verified properties
+      const baseProperties = verificationResult.verifiedProperties.length > 0 
+        ? verificationResult.verifiedProperties 
+        : retrievalResult.properties;
+      filteredProperties = filterPropertiesByFilters(actualFilters, baseProperties);
+    }
+
+    // If no properties found after filtering, use verified properties
+    if (filteredProperties.length === 0) {
+      filteredProperties = verificationResult.verifiedProperties.length > 0 
+        ? verificationResult.verifiedProperties 
+        : retrievalResult.properties;
+    }
+
+    // Step 6: Rank and explain using reasoning engine
+    const rankedResults = reasoningEngine.rankAndExplain(filteredProperties);
+    
+    // Step 7: Generate contextual suggestions
+    const context = contextAssistant.understandContext();
+    const proactiveSuggestions = contextAssistant.provideProactiveSuggestions(
+      context,
+      rankedResults.map(r => ({ ...r, matchScore: r.matchScore, explanation: r.explanation }))
+    );
+    
+    // Step 8: Generate comparative analysis if multiple properties
+    const comparativeAnalysis = rankedResults.length > 1
+      ? contextAssistant.generateComparativeAnalysis(rankedResults)
+      : '';
+
+    // Use sanitized response ONLY if hallucinations are severe
+    // Otherwise use the cleaned reply to preserve full content
+    let finalResponse = verificationResult.metrics.hallucinationScore > 0.5
+      ? verificationResult.sanitizedResponse
+      : reply;
+    
+    // Enhance response with contextual information if response is complete
+    if (finalResponse.length > 200 && proactiveSuggestions.length > 0) {
+      finalResponse += '\n\n💡 Proactive Tips:\n';
+      proactiveSuggestions.forEach((suggestion, i) => {
+        finalResponse += `${i + 1}. ${suggestion}\n`;
+      });
+    }
+    
+    // Add comparative analysis if available
+    if (comparativeAnalysis && finalResponse.length > 200) {
+      finalResponse += '\n\n' + comparativeAnalysis;
+    }
+    
+    // Log final response for debugging - ensure it's complete
+    console.log('✅ Final Response:', {
+      length: finalResponse.length,
+      preview: finalResponse.substring(0, 200),
+      endsWith: finalResponse.slice(-100),
+      lastSentence: finalResponse.split('.').slice(-2).join('.'), // Last 2 sentences
+      hallucinationScore: verificationResult.metrics.hallucinationScore,
+      usingSanitized: verificationResult.metrics.hallucinationScore > 0.5,
+      finishReason,
+      isComplete: finishReason !== 'length', // Check if response was complete
+    });
+    
+    // If response was truncated, log a warning
+    if (finishReason === 'length') {
+      console.warn('⚠️ WARNING: AI response may be incomplete due to token limit!', {
+        responseLength: finalResponse.length,
+        recommendation: 'Consider increasing max_tokens or using GPT-4',
+      });
+    }
+
+    return NextResponse.json({
+      response: finalResponse,
+      properties: filteredProperties,
+      count: filteredProperties.length,
+      filters: filters ? ((filters as any).filters || filters) : undefined,
+      // RAG metadata
+      retrieved_properties: retrievalResult.properties,
+      verified_properties: verificationResult.verifiedProperties,
+      search_strategy: retrievalResult.strategy,
+      confidence: retrievalResult.confidence,
+      // RAG Performance metrics
+      rag_metrics: verificationResult.metrics,
+    });
+  } catch (error: any) {
+    console.error('Error processing chat message:', error);
+    return NextResponse.json(
+      { error: 'Internal server error', details: error.message },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * Fallback function when OpenAI is not available
+ */
+async function fallbackToLocalFiltering(message: string) {
+  const { filterPropertiesByMessage } = require('@/lib/properties');
+  const allProperties = getAllProperties();
+  const filteredProperties = filterPropertiesByMessage(message, allProperties);
+
+  const lowerMessage = message.toLowerCase();
+  let responseMessage = '';
+
+  if (lowerMessage.includes('wharton') || lowerMessage.includes('附近')) {
+    responseMessage = `Found ${filteredProperties.length} properties near Wharton, highlighted on the map`;
+  } else if (lowerMessage.includes('洗烘') || lowerMessage.includes('laundry')) {
+    responseMessage = `Found ${filteredProperties.length} properties with in-unit laundry, highlighted on the map`;
+  } else if (
+    lowerMessage.includes('1500') ||
+    lowerMessage.includes('2000') ||
+    lowerMessage.includes('预算')
+  ) {
+    responseMessage = `Found ${filteredProperties.length} properties in your price range, highlighted on the map`;
+  } else {
+    responseMessage = `Found ${filteredProperties.length} matching properties, highlighted on the map`;
+  }
+
+  // Use HybridRetriever for fallback as well
+  const retriever = new HybridRetriever();
+  const retrievalResult = await retriever.retrieve(message, allProperties);
+
+  return NextResponse.json({
+    response: responseMessage,
+    properties: filteredProperties,
+    count: filteredProperties.length,
+    // RAG metadata (even in fallback mode)
+    retrieved_properties: retrievalResult.properties,
+    search_strategy: retrievalResult.strategy,
+    confidence: retrievalResult.confidence,
+  });
+}
