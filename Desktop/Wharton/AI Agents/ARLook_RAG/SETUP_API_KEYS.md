@@ -22,10 +22,10 @@ touch .env.local
 打开 `.env.local` 文件，添加以下内容：
 
 ```bash
-# Google Maps API Key
-GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
+# Google Maps API Key (NEXT_PUBLIC_ prefix is required for client-side access)
+NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
 
-# OpenAI API Key
+# OpenAI API Key (server-side only, no NEXT_PUBLIC_ prefix)
 OPENAI_API_KEY=your_openai_api_key_here
 ```
 
