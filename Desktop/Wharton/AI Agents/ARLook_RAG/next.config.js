@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Remove output: 'standalone' as it's not needed for Vercel
-  // Vercel handles Next.js deployments automatically
+  // Explicitly set outputFileTracingRoot to fix workspace root warning
+  outputFileTracingRoot: process.cwd(),
 };
 
 module.exports = nextConfig;
