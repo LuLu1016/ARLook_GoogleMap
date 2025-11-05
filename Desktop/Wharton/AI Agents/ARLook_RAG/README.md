@@ -85,12 +85,20 @@ yarn install
 
 ### Environment Setup
 
-Create a `.env.local` file in the root directory:
+**⚠️ IMPORTANT: Never commit API keys to Git!**
 
-```bash
-NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_google_maps_api_key
-OPENAI_API_KEY=your_openai_api_key
-```
+1. **Copy the example file**:
+   ```bash
+   cp .env.example .env.local
+   ```
+
+2. **Add your API keys** to `.env.local`:
+   ```bash
+   GOOGLE_MAPS_API_KEY=your_google_maps_api_key_here
+   OPENAI_API_KEY=your_openai_api_key_here
+   ```
+
+📖 **For detailed setup instructions, see [SETUP_API_KEYS.md](./SETUP_API_KEYS.md)**
 
 ### Development
 
