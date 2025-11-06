@@ -63,6 +63,7 @@ import { getAllProperties } from '@/server/utils/csv-loader';
 import { verifyAndFilterProperties, RAGMetrics } from '@/server/services/rag/verification';
 import { RentalReasoningEngine, SearchContext } from '@/server/services/rag/reasoning';
 import { ContextAwareAssistant } from '@/server/utils/context-aware';
+import { filterPropertiesByMessage } from '@/shared/constants/properties';
 
 /**
  * Get OpenAI API key from environment variables
@@ -229,7 +230,18 @@ Based on the conversation stage and detected intent, proactively suggest:
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    // Parse request body with error handling
+    let body: any;
+    try {
+      body = await request.json();
+    } catch (error: any) {
+      console.error('❌ Invalid JSON in request body:', error);
+      return NextResponse.json(
+        { error: 'Invalid JSON format in request body' },
+        { status: 400 }
+      );
+    }
+    
     const { message, conversationHistory } = body;
 
     if (!message || typeof message !== 'string') {
@@ -237,6 +249,57 @@ export async function POST(request: NextRequest) {
         { error: 'Message is required' },
         { status: 400 }
       );
+    }
+
+    // Validate and sanitize message input
+    const trimmedMessage = message.trim();
+    
+    // Validate message length (prevent extremely long inputs)
+    if (trimmedMessage.length === 0) {
+      return NextResponse.json(
+        { error: 'Message cannot be empty' },
+        { status: 400 }
+      );
+    }
+    
+    if (trimmedMessage.length > 5000) {
+      return NextResponse.json(
+        { error: 'Message is too long. Please keep it under 5000 characters.' },
+        { status: 400 }
+      );
+    }
+
+    // Validate conversationHistory format if provided
+    if (conversationHistory !== undefined && conversationHistory !== null) {
+      if (!Array.isArray(conversationHistory)) {
+        return NextResponse.json(
+          { error: 'conversationHistory must be an array' },
+          { status: 400 }
+        );
+      }
+      
+      // Validate each message in history
+      for (let i = 0; i < conversationHistory.length; i++) {
+        const msg = conversationHistory[i];
+        if (!msg || typeof msg !== 'object') {
+          return NextResponse.json(
+            { error: `Invalid message format at index ${i}` },
+            { status: 400 }
+          );
+        }
+        if (!msg.role || (msg.role !== 'user' && msg.role !== 'assistant')) {
+          return NextResponse.json(
+            { error: `Invalid message role at index ${i}. Must be 'user' or 'assistant'` },
+            { status: 400 }
+          );
+        }
+        if (!msg.content || typeof msg.content !== 'string') {
+          return NextResponse.json(
+            { error: `Invalid message content at index ${i}` },
+            { status: 400 }
+          );
+        }
+      }
     }
 
     // Check if OpenAI API key is configured
@@ -251,14 +314,33 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 1: Initialize reasoning engine and context-aware assistant
-    const reasoningEngine = new RentalReasoningEngine(openai);
-    const contextAssistant = new ContextAwareAssistant();
+    let reasoningEngine: RentalReasoningEngine;
+    let contextAssistant: ContextAwareAssistant;
+    
+    try {
+      reasoningEngine = new RentalReasoningEngine(openai);
+      contextAssistant = new ContextAwareAssistant();
+    } catch (error: any) {
+      console.error('❌ Failed to initialize reasoning engine:', error);
+      return fallbackToLocalFiltering(trimmedMessage);
+    }
     
     // Step 2: Clarify user needs (if needed)
-    const clarificationResult = await reasoningEngine.clarifyNeeds(
-      message,
-      conversationHistory || []
-    );
+    let clarificationResult;
+    try {
+      clarificationResult = await reasoningEngine.clarifyNeeds(
+        trimmedMessage,
+        conversationHistory || []
+      );
+    } catch (error: any) {
+      console.error('❌ Error in clarification step:', error);
+      // Continue with original message if clarification fails
+      clarificationResult = {
+        needsClarification: false,
+        clarifiedQuery: trimmedMessage,
+        missingInfo: [],
+      };
+    }
     
     // If clarification is needed, return clarification questions
     if (clarificationResult.needsClarification && clarificationResult.clarificationQuestions) {
@@ -271,15 +353,38 @@ export async function POST(request: NextRequest) {
     }
     
     // Use clarified query
-    const clarifiedQuery = clarificationResult.clarifiedQuery || message;
+    const clarifiedQuery = clarificationResult?.clarifiedQuery || trimmedMessage;
     
     // Step 3: Select search strategy
-    const searchStrategy = await reasoningEngine.selectSearchStrategy(clarifiedQuery);
+    let searchStrategy: 'keyword' | 'semantic' | 'hybrid';
+    try {
+      searchStrategy = await reasoningEngine.selectSearchStrategy(clarifiedQuery);
+    } catch (error: any) {
+      console.error('❌ Error selecting search strategy:', error);
+      searchStrategy = 'hybrid'; // Default fallback
+    }
     
     // Step 4: Use HybridRetriever to perform RAG retrieval
-    const retriever = new HybridRetriever();
-    const allProperties = getAllProperties();
-    const retrievalResult = await retriever.retrieve(clarifiedQuery, allProperties, openai);
+    let retriever: HybridRetriever;
+    let allProperties: Property[];
+    let retrievalResult;
+    
+    try {
+      retriever = new HybridRetriever();
+      allProperties = getAllProperties();
+      
+      // Ensure we have properties
+      if (!allProperties || allProperties.length === 0) {
+        console.warn('⚠️ No properties loaded from database');
+        allProperties = []; // Empty array as fallback
+      }
+      
+      retrievalResult = await retriever.retrieve(clarifiedQuery, allProperties, openai);
+    } catch (error: any) {
+      console.error('❌ Error in RAG retrieval:', error);
+      // Return fallback response
+      return fallbackToLocalFiltering(trimmedMessage);
+    }
     
     console.log('RAG Retrieval Result:', {
       strategy: retrievalResult.strategy,
@@ -290,11 +395,23 @@ export async function POST(request: NextRequest) {
 
     // Step 5: Prepare conversation messages with retrieved properties
     // Use retrieved properties instead of all properties for better context
-    const retrievedProperties = retrievalResult.properties.length > 0 
+    const retrievedProperties = (retrievalResult?.properties && retrievalResult.properties.length > 0)
       ? retrievalResult.properties 
-      : allProperties; // Fallback to all if retrieval returns empty
+      : (allProperties.length > 0 ? allProperties : []); // Fallback to all if retrieval returns empty
     
-    const systemPrompt = createSystemPrompt(retrievedProperties, conversationHistory || []);
+    // Ensure we have at least some properties
+    if (retrievedProperties.length === 0) {
+      console.warn('⚠️ No properties retrieved, using fallback');
+      return fallbackToLocalFiltering(trimmedMessage);
+    }
+    
+    let systemPrompt: string;
+    try {
+      systemPrompt = createSystemPrompt(retrievedProperties, conversationHistory || []);
+    } catch (error: any) {
+      console.error('❌ Error creating system prompt:', error);
+      return fallbackToLocalFiltering(trimmedMessage);
+    }
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       {
         role: 'system',
@@ -306,17 +423,24 @@ export async function POST(request: NextRequest) {
     if (conversationHistory && Array.isArray(conversationHistory)) {
       const recentHistory = conversationHistory.slice(-10);
       for (const msg of recentHistory) {
-        messages.push({
-          role: msg.role === 'user' ? 'user' : 'assistant',
-          content: msg.content,
-        });
+        // Validate message format before adding
+        if (msg && msg.role && msg.content && typeof msg.content === 'string') {
+          try {
+            messages.push({
+              role: msg.role === 'user' ? 'user' : 'assistant',
+              content: String(msg.content).substring(0, 2000), // Limit individual message length
+            });
+          } catch (error: any) {
+            console.warn('⚠️ Skipping invalid message in history:', error);
+          }
+        }
       }
     }
 
     // Add current user message
     messages.push({
       role: 'user',
-      content: message,
+      content: trimmedMessage,
     });
 
     // Call OpenAI API with retry logic for incomplete responses
@@ -428,11 +552,23 @@ export async function POST(request: NextRequest) {
     
     // Ensure we have a response
     if (!aiResponse) {
-      return fallbackToLocalFiltering(message);
+      return fallbackToLocalFiltering(trimmedMessage);
     }
 
     // Parse and clean AI response
-    const { reply, filters } = parseAIResponse(aiResponse);
+    let reply: string;
+    let filters: any;
+    
+    try {
+      const parsed = parseAIResponse(aiResponse);
+      reply = parsed.reply || aiResponse; // Fallback to original if parsing fails
+      filters = parsed.filters;
+    } catch (error: any) {
+      console.error('❌ Error parsing AI response:', error);
+      // Use original response as fallback
+      reply = aiResponse.replace(/\[DATA\][\s\S]*$/, '').trim() || 'I found some properties for you. Please check the map for details.';
+      filters = undefined;
+    }
     
     // Validate response completeness - check if all mentioned properties are listed
     const mentionedCountMatch = reply.match(/(\d+)\s*(?:excellent\s+)?(?:options?|properties?|matches?)/i);
@@ -493,11 +629,30 @@ export async function POST(request: NextRequest) {
     });
 
     // CRITICAL: Verify and filter properties to prevent hallucinations
-    const verificationResult = verifyAndFilterProperties(
-      reply,
-      retrievalResult.properties,
-      filters
-    );
+    let verificationResult;
+    try {
+      verificationResult = verifyAndFilterProperties(
+        reply,
+        retrievalResult?.properties || [],
+        filters
+      );
+    } catch (error: any) {
+      console.error('❌ Error in verification:', error);
+      // Create a safe fallback verification result
+      verificationResult = {
+        verifiedProperties: retrievalResult?.properties || [],
+        metrics: {
+          retrievalAccuracy: 0.5,
+          responseAccuracy: 0.5,
+          hallucinationScore: 0,
+          propertyMentionedCount: 0,
+          propertyVerifiedCount: 0,
+          dataConsistency: 0.5,
+          warnings: ['Verification failed, using retrieved properties'],
+        },
+        sanitizedResponse: reply,
+      };
+    }
 
     // Log RAG metrics for monitoring
     console.log('📊 RAG Metrics:', {
@@ -539,19 +694,38 @@ export async function POST(request: NextRequest) {
     }
 
     // Step 6: Rank and explain using reasoning engine
-    const rankedResults = reasoningEngine.rankAndExplain(filteredProperties);
+    let rankedResults;
+    try {
+      rankedResults = reasoningEngine.rankAndExplain(filteredProperties);
+    } catch (error: any) {
+      console.error('❌ Error in ranking:', error);
+      // Fallback: just use filtered properties as-is
+      rankedResults = filteredProperties.map(p => ({ ...p, matchScore: 50, explanation: 'Property matches your criteria' }));
+    }
     
     // Step 7: Generate contextual suggestions
-    const context = contextAssistant.understandContext();
-    const proactiveSuggestions = contextAssistant.provideProactiveSuggestions(
-      context,
-      rankedResults.map(r => ({ ...r, matchScore: r.matchScore, explanation: r.explanation }))
-    );
+    let proactiveSuggestions: string[] = [];
+    try {
+      const context = contextAssistant.understandContext();
+      proactiveSuggestions = contextAssistant.provideProactiveSuggestions(
+        context,
+        rankedResults.map(r => ({ ...r, matchScore: r.matchScore || 50, explanation: r.explanation || 'Property matches your criteria' }))
+      );
+    } catch (error: any) {
+      console.error('❌ Error generating proactive suggestions:', error);
+      // Continue without suggestions
+    }
     
     // Step 8: Generate comparative analysis if multiple properties
-    const comparativeAnalysis = rankedResults.length > 1
-      ? contextAssistant.generateComparativeAnalysis(rankedResults)
-      : '';
+    let comparativeAnalysis = '';
+    try {
+      if (rankedResults.length > 1) {
+        comparativeAnalysis = contextAssistant.generateComparativeAnalysis(rankedResults);
+      }
+    } catch (error: any) {
+      console.error('❌ Error generating comparative analysis:', error);
+      // Continue without analysis
+    }
 
     // Use sanitized response ONLY if hallucinations are severe
     // Otherwise use the cleaned reply to preserve full content
@@ -618,9 +792,9 @@ export async function POST(request: NextRequest) {
  * Fallback function when OpenAI is not available
  */
 async function fallbackToLocalFiltering(message: string) {
-  const { filterPropertiesByMessage } = require('@/lib/properties');
-  const allProperties = getAllProperties();
-  const filteredProperties = filterPropertiesByMessage(message, allProperties);
+  try {
+    const allProperties = getAllProperties();
+    const filteredProperties = filterPropertiesByMessage(message, allProperties);
 
   const lowerMessage = message.toLowerCase();
   let responseMessage = '';
@@ -639,17 +813,30 @@ async function fallbackToLocalFiltering(message: string) {
     responseMessage = `Found ${filteredProperties.length} matching properties, highlighted on the map`;
   }
 
-  // Use HybridRetriever for fallback as well
-  const retriever = new HybridRetriever();
-  const retrievalResult = await retriever.retrieve(message, allProperties);
+    // Use HybridRetriever for fallback as well
+    const retriever = new HybridRetriever();
+    const retrievalResult = await retriever.retrieve(message, allProperties);
 
-  return NextResponse.json({
-    response: responseMessage,
-    properties: filteredProperties,
-    count: filteredProperties.length,
-    // RAG metadata (even in fallback mode)
-    retrieved_properties: retrievalResult.properties,
-    search_strategy: retrievalResult.strategy,
-    confidence: retrievalResult.confidence,
-  });
+    return NextResponse.json({
+      response: responseMessage,
+      properties: filteredProperties,
+      count: filteredProperties.length,
+      // RAG metadata (even in fallback mode)
+      retrieved_properties: retrievalResult.properties,
+      search_strategy: retrievalResult.strategy,
+      confidence: retrievalResult.confidence,
+    });
+  } catch (error: any) {
+    console.error('Error in fallback filtering:', error);
+    // Return safe fallback response
+    const allProperties = getAllProperties();
+    return NextResponse.json({
+      response: 'I encountered an error processing your request. Here are all available properties.',
+      properties: allProperties.slice(0, 10), // Limit to first 10 for safety
+      count: Math.min(allProperties.length, 10),
+      retrieved_properties: allProperties.slice(0, 10),
+      search_strategy: 'fallback',
+      confidence: 0.5,
+    });
+  }
 }

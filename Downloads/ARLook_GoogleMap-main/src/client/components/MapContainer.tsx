@@ -157,9 +157,22 @@ export default function MapContainer({
     const initMap = async () => {
       const apiKey = getGoogleMapsApiKey();
       
+      // Debug: Log API key status
+      console.log('🔍 Google Maps API Key Debug:', {
+        apiKey: apiKey ? `${apiKey.substring(0, 10)}...` : 'EMPTY',
+        apiKeyLength: apiKey?.length || 0,
+        envVar: typeof window !== 'undefined' ? 'Client-side' : 'Server-side',
+        allEnvKeys: typeof window !== 'undefined' ? Object.keys(window).filter(k => k.includes('NEXT')).join(', ') : 'N/A'
+      });
+      
       // Check if API key is valid
       if (!apiKey || apiKey === 'your_api_key_here' || apiKey === 'your_google_maps_api_key_here') {
-        setMapError('Google Maps API Key not configured');
+        console.error('❌ Google Maps API Key 未配置或无效:', {
+          apiKey,
+          isEmpty: !apiKey,
+          isPlaceholder: apiKey === 'your_api_key_here' || apiKey === 'your_google_maps_api_key_here'
+        });
+        setMapError('Google Maps API Key not configured. Please check .env.local file.');
         return;
       }
 
@@ -183,20 +196,59 @@ export default function MapContainer({
           }
       } catch (error: any) {
         console.error('❌ Error loading Google Maps:', error);
+        console.error('错误详情:', {
+          message: error?.message,
+          name: error?.name,
+          stack: error?.stack,
+          apiKey: apiKey ? `${apiKey.substring(0, 10)}...` : 'EMPTY'
+        });
         
         let errorMessage = 'Failed to load Google Maps. ';
+        let fixInstructions = '';
         
-        if (error?.message?.includes('RefererNotAllowedMapError')) {
-          errorMessage += 'API Key限制设置不正确。请在Google Cloud Console中配置HTTP引荐来源网址限制，添加: http://localhost:3000/*';
-        } else if (error?.message?.includes('InvalidKeyMapError')) {
-          errorMessage += 'API Key无效。请检查API Key是否正确，并确认已启用Maps JavaScript API。';
-        } else if (error?.message?.includes('ApiNotActivatedMapError')) {
-          errorMessage += 'Maps JavaScript API未启用。请在Google Cloud Console中启用该API。';
+        if (error?.message?.includes('RefererNotAllowedMapError') || error?.name === 'RefererNotAllowedMapError') {
+          errorMessage += 'API Key限制设置不正确。';
+          fixInstructions = `
+请在 Google Cloud Console 中配置：
+1. 访问: https://console.cloud.google.com/apis/credentials
+2. 编辑你的 API Key
+3. 在 "Application restrictions" 中选择 "HTTP referrers"
+4. 添加: http://localhost:3000/*
+5. 保存并等待 1-2 分钟`;
+        } else if (error?.message?.includes('InvalidKeyMapError') || error?.name === 'InvalidKeyMapError') {
+          errorMessage += 'API Key 无效或 Maps JavaScript API 未启用。';
+          fixInstructions = `
+请按以下步骤操作：
+1. 启用 Maps JavaScript API:
+   - 访问: https://console.cloud.google.com/apis/library
+   - 搜索 "Maps JavaScript API"
+   - 点击 "Enable"
+
+2. 检查 API Key 限制:
+   - 访问: https://console.cloud.google.com/apis/credentials
+   - 编辑你的 API Key
+   - 在 "API restrictions" 中确保包含 "Maps JavaScript API"
+   - 或者选择 "Don't restrict key"（仅用于测试）
+
+3. 等待 1-2 分钟让更改生效，然后刷新页面`;
+        } else if (error?.message?.includes('ApiNotActivatedMapError') || error?.name === 'ApiNotActivatedMapError') {
+          errorMessage += 'Maps JavaScript API 未启用。';
+          fixInstructions = `
+请启用 Maps JavaScript API:
+1. 访问: https://console.cloud.google.com/apis/library
+2. 搜索 "Maps JavaScript API"
+3. 点击 "Enable"
+4. 等待几秒钟，然后刷新页面`;
         } else {
-          errorMessage += `错误详情: ${error?.message || '未知错误'}`;
+          errorMessage += `错误详情: ${error?.message || error?.name || '未知错误'}`;
+          fixInstructions = `
+请检查：
+1. API Key 是否正确配置在 .env.local 文件中
+2. 是否已启用 Maps JavaScript API
+3. API Key 的限制设置是否正确`;
         }
         
-        setMapError(errorMessage);
+        setMapError(errorMessage + fixInstructions);
       }
     };
 
@@ -214,14 +266,14 @@ export default function MapContainer({
     priceControlDiv.innerHTML = `
       <div style="background: white; padding: 12px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
         <label style="display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #374151;">
-          Max Price: $<span id="priceValue">${filters?.maxPrice || 3000}</span> per person
+          Max Price: $<span id="priceValue">${filters?.maxPrice || 'All'}</span> per person
         </label>
         <input 
           type="range" 
           min="1000" 
-          max="5000" 
+          max="6000" 
           step="100" 
-          value="${filters?.maxPrice || 3000}" 
+          value="${filters?.maxPrice || 6000}" 
           id="priceSlider"
           style="width: 200px; cursor: pointer;"
         />
@@ -289,11 +341,18 @@ export default function MapContainer({
     if (priceSlider && priceValue) {
       priceSlider.addEventListener('input', (e) => {
         const price = parseInt((e.target as HTMLInputElement).value);
-        priceValue.textContent = price.toString();
-        onFiltersUpdate({
-          ...filters,
-          maxPrice: price,
-        });
+        // If price is at max (6000), don't set filter (show all)
+        if (price >= 6000) {
+          priceValue.textContent = 'All';
+          const { maxPrice, ...restFilters } = filters || {};
+          onFiltersUpdate(Object.keys(restFilters).length > 0 ? restFilters : undefined);
+        } else {
+          priceValue.textContent = price.toString();
+          onFiltersUpdate({
+            ...filters,
+            maxPrice: price,
+          });
+        }
       });
     }
 
