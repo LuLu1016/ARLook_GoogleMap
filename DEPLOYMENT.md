@@ -1,46 +1,28 @@
 # 🚀 Deployment Guide
 
-Complete guide for deploying ARLook to production.
+Deploy ARLook to production on Vercel.
 
-## Quick Start (Vercel - Recommended)
+## Quick Deploy (Vercel)
 
-### Option 1: GitHub Integration (Easiest)
+### Option 1: GitHub Integration
 
-1. **Push code to GitHub**
-   ```bash
-   git add .
-   git commit -m "Ready for deployment"
-   git push
-   ```
-
-2. **Deploy via Vercel Dashboard**
-   - Visit: https://vercel.com/new
-   - Login with GitHub
-   - Select your repository → Import
-
-3. **Configure Environment Variables**
-   - In Vercel Dashboard → Settings → Environment Variables
-   - Add:
-     - `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` = your Google Maps API key
-     - `OPENAI_API_KEY` = your OpenAI API key
-   - Select "All Environments" (Production, Preview, Development)
-
-4. **Deploy** → Done!
+1. Push code to GitHub
+2. Visit [Vercel Dashboard](https://vercel.com/new)
+3. Import repository
+4. Add environment variables:
+   - `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`
+   - `OPENAI_API_KEY`
+5. Deploy
 
 ### Option 2: Vercel CLI
 
 ```bash
-# Install CLI
 npm install -g vercel
-
-# Login
 vercel login
-
-# Deploy
 vercel --prod
 ```
 
-### Option 3: Automated Script
+### Option 3: Script
 
 ```bash
 ./deploy-to-vercel.sh
@@ -49,81 +31,55 @@ vercel --prod
 ## Pre-Deployment Checklist
 
 - [ ] Code pushed to GitHub
-- [ ] `.env.local` in `.gitignore` (never commit API keys)
-- [ ] Google Maps API key ready
-- [ ] OpenAI API key ready
-- [ ] Local build succeeds: `npm run build`
+- [ ] `.env.local` in `.gitignore`
+- [ ] API keys ready
+- [ ] Local build succeeds: `cd src && npm run build`
 
-## Post-Deployment Steps
+## Post-Deployment
 
 1. **Update Google Maps API Restrictions**
-   - Visit: https://console.cloud.google.com/apis/credentials
-   - Edit your API Key
-   - Add HTTP referrers:
-     ```
-     https://*.vercel.app/*
-     https://your-project.vercel.app/*
-     ```
+   - Add HTTP referrers: `https://*.vercel.app/*`
+   - Add your domain: `https://your-project.vercel.app/*`
 
 2. **Test Your Site**
    - Map displays correctly
    - Chat functionality works
-   - API routes respond properly
+   - API routes respond
 
-## Alternative Platforms
+## Environment Variables in Vercel
 
-### Netlify
-- Free tier available
-- Good for static sites
-- Next.js support is less optimized than Vercel
+Set in Vercel Dashboard → Settings → Environment Variables:
+- `NEXT_PUBLIC_GOOGLE_MAPS_API_KEY`
+- `OPENAI_API_KEY`
 
-### Railway
-- $5/month free credit
-- Requires credit card
-- Good for apps with databases
-
-### Render
-- Free tier available
-- Goes to sleep after inactivity
-- Not ideal for production
+Select "All Environments" (Production, Preview, Development).
 
 ## Troubleshooting
 
-**Q: 404 error after deployment?**
-- Check Git repository is connected in Vercel
-- Verify deployment status is "Ready" (green)
-- Check build logs for errors
+**Build fails?**
+- Check build logs in Vercel Dashboard
+- Verify Node.js version compatibility
+- Ensure all dependencies in `package.json`
 
-**Q: Map not displaying?**
-- Verify Google Maps API key is set correctly
-- Update API key restrictions to include your domain
+**Map not displaying?**
+- Verify API key in Vercel environment variables
+- Update API key restrictions for your domain
 - Check browser console for errors
 
-**Q: Environment variables not working?**
-- Ensure variables are set in Vercel Dashboard (not just `.env.local`)
-- Restart/redeploy after adding variables
+**Environment variables not working?**
+- Variables must be set in Vercel Dashboard (not just `.env.local`)
+- Redeploy after adding variables
 - Verify variable names match exactly (case-sensitive)
 
-**Q: Build fails?**
-- Check build logs in Vercel Dashboard
-- Ensure all dependencies are in `package.json`
-- Verify Node.js version compatibility
+## Alternative Platforms
 
-## Security Best Practices
+- **Netlify**: Free tier, good for static sites
+- **Railway**: $5/month credit, good for apps with databases
+- **Render**: Free tier, goes to sleep after inactivity
 
-1. **Never commit `.env.local`** - Already in `.gitignore`
-2. **Use Vercel environment variables** - Don't hardcode keys
-3. **Restrict API keys** - Set HTTP referrer restrictions for Google Maps
-4. **Monitor usage** - Set up alerts for API usage
-5. **Rotate keys regularly** - Especially if compromised
+## Security
 
-## Your Deployment URL
-
-After successful deployment, find your URL in:
-- Vercel Dashboard → Deployments → Latest deployment → "Visit" button
-- Format: `https://your-project.vercel.app`
-
-## Related Documentation
-
-- [Setup Guide](./SETUP.md) - API key setup
-- [README.md](./README.md) - Project overview
+- Never commit `.env.local` to Git
+- Use Vercel environment variables
+- Restrict API keys with HTTP referrers
+- Monitor API usage and set alerts

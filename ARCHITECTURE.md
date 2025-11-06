@@ -1,45 +1,58 @@
-# 🏗️ Architecture Documentation
+# 🏗️ Architecture
 
-Complete technical documentation for ARLook developers and contributors.
+Technical documentation for ARLook developers.
 
 ## Overview
 
-ARLook is a Next.js 15 application that combines **Google Maps visualization** with an **AI-powered RAG (Retrieval-Augmented Generation) system** for property search and recommendations.
+ARLook is a Next.js 15 application combining **Google Maps visualization** with an **AI-powered RAG system** for property search.
 
 ## System Architecture
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                     Client Browser                       │
-│  ┌────────────────────┐  ┌──────────────────────────┐   │
-│  │   Google Maps      │  │   Chat Sidebar           │   │
-│  │   Component        │  │   Component              │   │
-│  └────────────────────┘  └──────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
-                         │
-                         │ HTTP/API
-                         ▼
-┌─────────────────────────────────────────────────────────┐
-│              Next.js Application Server                  │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │            API Routes Layer                      │   │
-│  │  ┌────────────┐  ┌────────────┐  ┌──────────┐  │   │
-│  │  │ /api/chat  │  │/api/props  │  │/api/test │  │   │
-│  │  └────────────┘  └────────────┘  └──────────┘  │   │
-│  └──────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────┐   │
-│  │         RAG Pipeline                             │   │
-│  │  HybridRetriever → OpenAI → Verification         │   │
-│  └──────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────┘
+Client Browser
+  ├── Google Maps Component
+  └── Chat Sidebar Component
+         │
+         │ HTTP/API
+         ▼
+Next.js Server
+  ├── API Routes (/api/chat, /api/properties)
+  └── RAG Pipeline
+       ├── HybridRetriever
+       ├── OpenAI
+       └── Verification
 ```
+
+## Core Components
+
+### API Routes
+
+**POST `/api/chat`** - Main RAG endpoint
+- Handles user chat messages
+- Retrieves properties via RAG
+- Generates AI responses
+- Returns properties, filters, and metrics
+
+**GET `/api/properties`** - Get all properties
+
+**GET/POST `/api/test-rag`** - Test RAG system
+
+### RAG System
+
+**HybridRetriever** - Three retrieval strategies:
+1. Keyword Search - Exact matching
+2. Semantic Search - Vector similarity
+3. Hybrid Search - Combined approach
+
+**Verification** - Prevents hallucinations:
+- Validates property existence
+- Checks data consistency
+- Sanitizes responses
 
 ## Data Structures
 
-### Core Types (`types/index.ts`)
-
 ```typescript
-export interface Property {
+interface Property {
   id: string;
   name: string;
   address: string;
@@ -52,105 +65,38 @@ export interface Property {
   description: string;
   walkingDistanceToWharton?: number;
 }
-
-export interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: Date;
-}
 ```
-
-## API Routes
-
-### POST `/api/chat` - Main RAG Endpoint
-
-Handles user chat messages with RAG-based property retrieval and AI response generation.
-
-**Request:**
-```json
-{
-  "message": "Apartments near Wharton with in-unit laundry",
-  "conversationHistory": []
-}
-```
-
-**Response:**
-```json
-{
-  "response": "AI-generated response",
-  "properties": [...],
-  "count": 3,
-  "filters": {
-    "maxPrice": 2000,
-    "amenities": ["In-unit laundry"]
-  },
-  "rag_metrics": {
-    "retrievalAccuracy": 0.8,
-    "responseAccuracy": 1.0,
-    "hallucinationScore": 0.0
-  }
-}
-```
-
-### GET `/api/properties`
-
-Get all available properties.
-
-### GET/POST `/api/test-rag`
-
-Test RAG system performance with preset queries or custom queries.
-
-## RAG System
-
-### HybridRetriever
-
-Intelligent query routing with three strategies:
-
-1. **Keyword Search** - Exact matching on price, bedrooms, amenities
-2. **Semantic Search** - Vector similarity (simulated embeddings)
-3. **Hybrid Search** - Combines keyword + semantic results
-
-### Hallucination Prevention
-
-Multi-step verification ensures:
-- Only real properties are mentioned
-- Data consistency (price, distance accuracy)
-- Response sanitization if hallucinations detected
 
 ## Project Structure
 
 ```
-ARLook_GoogleMap/
-├── app/
-│   ├── api/              # API routes
-│   ├── components/       # React components
-│   └── page.tsx          # Main page
-├── lib/
-│   ├── retrieval.ts      # RAG retrieval
-│   ├── rag-verification.ts
-│   ├── openai.ts
-│   └── csv-loader.ts
-├── types/
-│   └── index.ts          # TypeScript types
-└── data/                  # CSV data files
+src/
+├── app/              # Next.js app directory
+│   ├── api/         # API routes
+│   └── page.tsx     # Main page
+├── client/          # Client components
+│   └── components/  # React components
+├── server/          # Server services
+│   ├── services/    # RAG, OpenAI
+│   └── utils/       # Utilities
+├── shared/          # Shared types/constants
+└── data/            # CSV data files
 ```
 
 ## Extension Points
 
-### Add New Data Sources
-- Create new loader in `lib/`
-- Update `csv-loader.ts` to integrate
+**Add Data Sources:**
+- Create loader in `server/utils/`
+- Update CSV loader to integrate
 
-### Enhance Retrieval
-- Modify `lib/retrieval.ts`
+**Enhance Retrieval:**
+- Modify `server/services/rag/retrieval.ts`
 - Add real vector embeddings
 - Implement reranking
 
-### Improve Verification
-- Enhance `lib/rag-verification.ts`
-- Add more checks
-- Implement confidence thresholds
+**Improve Verification:**
+- Enhance `server/services/rag/verification.ts`
+- Add confidence thresholds
 
 ## Testing
 
@@ -164,21 +110,21 @@ curl -X POST http://localhost:3000/api/test-rag \
   -d '{"query": "Apartments near Wharton"}'
 ```
 
-## Performance Considerations
+## Performance
 
-### Current Limitations
+**Current:**
 - In-memory property storage
 - Simulated embeddings
-- CSV parsing on every request
+- CSV parsing on request
 
-### Optimization Opportunities
+**Optimization Opportunities:**
 - Add database (PostgreSQL)
 - Implement caching (Redis)
-- Use real vector database (Pinecone/Weaviate)
+- Use vector database (Pinecone/Weaviate)
 - Batch CSV loading
 
 ## Related Documentation
 
 - [README.md](./README.md) - Project overview
-- [SETUP.md](./SETUP.md) - Setup instructions
+- [START_GUIDE.md](./START_GUIDE.md) - Setup instructions
 - [DEPLOYMENT.md](./DEPLOYMENT.md) - Deployment guide

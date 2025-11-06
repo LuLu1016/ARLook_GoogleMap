@@ -1,0 +1,78 @@
+# ARLook Project Requirements
+# This file lists all system and package requirements
+# 
+# Installation:
+# 1. For Node.js packages: npm install (automatically reads package.json)
+# 2. Or use the install script: ./install.sh
+# 3. Or follow the manual steps below
+
+# ============================================
+# SYSTEM REQUIREMENTS
+# ============================================
+
+# Node.js: 18.18.0 or higher, or 20.0.0+
+# Check version: node --version
+# Install: brew install node (macOS) or visit https://nodejs.org/
+
+# npm: 8.x or higher (comes with Node.js)
+# Check version: npm --version
+
+# Git: For cloning the repository
+# Check version: git --version
+
+# ============================================
+# API KEYS REQUIRED
+# ============================================
+
+# Google Maps API Key
+# Get from: https://console.cloud.google.com/
+# Required for: Map visualization
+
+# OpenAI API Key
+# Get from: https://platform.openai.com/api-keys
+# Required for: AI chat functionality
+
+# ============================================
+# NPM PACKAGES (Production Dependencies)
+# ============================================
+# These are automatically installed via: npm install
+# Located in: src/package.json
+
+@googlemaps/js-api-loader@^1.16.6
+@types/node@^20.10.0
+@types/react@^18.2.0
+@types/react-dom@^18.2.0
+csv-parse@^6.1.0
+csv-stringify@^6.6.0
+next@^15.0.0
+openai@^6.8.1
+react@^18.3.0
+react-dom@^18.3.0
+typescript@^5.3.0
+
+# ============================================
+# NPM PACKAGES (Development Dependencies)
+# ============================================
+
+@types/google.maps@^3.55.0
+autoprefixer@^10.4.16
+eslint@^8.55.0
+eslint-config-next@^15.0.0
+postcss@^8.4.32
+tailwindcss@^3.4.0
+
+# ============================================
+# QUICK INSTALL COMMANDS
+# ============================================
+# 
+# Option 1: Use the installation script (recommended)
+#   ./install.sh
+#   or
+#   python3 install.py
+#
+# Option 2: Manual installation
+#   cd src && npm install
+#
+# Option 3: One-line command
+#   cd src && npm install && cd .. && cp .env.example .env.local 2>/dev/null || true
+
