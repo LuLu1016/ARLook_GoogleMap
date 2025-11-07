@@ -77,29 +77,30 @@ function getMarkerStyle(
  */
 function createInfoWindowContent(property: Property): string {
   const walkingInfo = property.walkingDistanceToWharton
-    ? `<div class="flex items-center text-sm text-gray-600 mb-2">
-        <span>🚶 ${property.walkingDistanceToWharton}min to Wharton</span>
+    ? `<div style="display: flex; align-items: center; gap: 6px; margin-bottom: 10px; padding: 6px 10px; background: rgba(99, 102, 241, 0.1); border-radius: 8px; width: fit-content;">
+        <span style="font-size: 14px;">🚶</span>
+        <span style="font-size: 12px; color: #6366f1; font-weight: 600;">${property.walkingDistanceToWharton}min to Wharton</span>
       </div>`
     : '';
 
   const amenitiesHtml = property.amenities.slice(0, 4).map(
-    (amenity) => `<span class="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded">${amenity}</span>`
+    (amenity) => `<span style="background: linear-gradient(135deg, rgba(99, 102, 241, 0.1), rgba(139, 92, 246, 0.1)); color: #6366f1; font-size: 11px; font-weight: 600; padding: 4px 10px; border-radius: 8px; border: 1px solid rgba(99, 102, 241, 0.2);">${amenity}</span>`
   ).join('');
 
   return `
-    <div style="padding: 12px; max-width: 280px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
-      <h3 style="font-weight: bold; font-size: 18px; margin-bottom: 4px; color: #1f2937;">${property.name}</h3>
-      <p style="color: #6b7280; font-size: 14px; margin-bottom: 8px;">${property.address}</p>
-      <div style="margin-bottom: 8px;">
-        <span style="font-size: 20px; font-weight: bold; color: #2563eb;">$${property.price}</span>
-        <span style="font-size: 12px; color: #6b7280; margin-left: 4px;">per person</span>
-        <span style="font-size: 14px; color: #6b7280; margin-left: 8px;">${property.bedrooms}b${property.bathrooms}b</span>
+    <div style="padding: 16px; max-width: 300px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
+      <h3 style="font-weight: 700; font-size: 18px; margin-bottom: 6px; color: #0f172a; letter-spacing: -0.02em;">${property.name}</h3>
+      <p style="color: #64748b; font-size: 13px; margin-bottom: 10px; font-weight: 500;">${property.address}</p>
+      <div style="margin-bottom: 10px; display: flex; align-items: baseline; gap: 6px;">
+        <span style="font-size: 24px; font-weight: 700; color: #6366f1; letter-spacing: -0.02em;">$${property.price}</span>
+        <span style="font-size: 12px; color: #94a3b8; margin-left: 2px; font-weight: 500;">per person</span>
+        <span style="font-size: 13px; color: #64748b; margin-left: 8px; font-weight: 600; background: rgba(99, 102, 241, 0.1); padding: 2px 8px; border-radius: 6px;">${property.bedrooms}b${property.bathrooms}b</span>
       </div>
       ${walkingInfo}
-      <div style="display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px;">
+      <div style="display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px;">
         ${amenitiesHtml}
       </div>
-      <p style="font-size: 14px; color: #374151; line-height: 1.4;">${property.description}</p>
+      <p style="font-size: 13px; color: #475569; line-height: 1.5; font-weight: 500;">${property.description}</p>
     </div>
   `;
 }
@@ -208,13 +209,13 @@ export default function MapContainer({
   useEffect(() => {
     if (!map || !onFiltersUpdate) return;
 
-    // Price control
+    // Price control - Modern design
     const priceControlDiv = document.createElement('div');
-    priceControlDiv.style.cssText = 'margin: 10px; padding: 0;';
+    priceControlDiv.style.cssText = 'margin: 12px; padding: 0;';
     priceControlDiv.innerHTML = `
-      <div style="background: white; padding: 12px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;">
-        <label style="display: block; font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #374151;">
-          Max Price: $<span id="priceValue">${filters?.maxPrice || 3000}</span> per person
+      <div style="background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(12px); padding: 16px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.1), 0 4px 10px rgba(0,0,0,0.05); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; border: 1px solid rgba(226, 232, 240, 0.8);">
+        <label style="display: block; font-size: 13px; font-weight: 600; margin-bottom: 10px; color: #1e293b; letter-spacing: -0.01em;">
+          Max Price: $<span id="priceValue" style="color: #6366f1; font-weight: 700;">${filters?.maxPrice || 3000}</span> <span style="color: #64748b; font-weight: 400; font-size: 12px;">per person</span>
         </label>
         <input 
           type="range" 
@@ -223,26 +224,26 @@ export default function MapContainer({
           step="100" 
           value="${filters?.maxPrice || 3000}" 
           id="priceSlider"
-          style="width: 200px; cursor: pointer;"
+          style="width: 220px; cursor: pointer; accent-color: #6366f1; height: 6px; border-radius: 3px;"
         />
       </div>
     `;
     
     map.controls[google.maps.ControlPosition.TOP_LEFT].push(priceControlDiv);
 
-    // Amenities control
+    // Amenities control - Modern design
     const amenitiesControlDiv = document.createElement('div');
-    amenitiesControlDiv.style.cssText = 'margin: 10px; padding: 0;';
+    amenitiesControlDiv.style.cssText = 'margin: 12px; padding: 0;';
     amenitiesControlDiv.innerHTML = `
-      <div style="background: white; padding: 12px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 200px;">
-        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #374151;">Filter by Amenities</div>
-        <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div style="background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(12px); padding: 16px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.1), 0 4px 10px rgba(0,0,0,0.05); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 220px; border: 1px solid rgba(226, 232, 240, 0.8);">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 12px; color: #1e293b; letter-spacing: -0.01em;">Filter by Amenities</div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
           ${['Gym', 'In-unit laundry', 'Parking', 'Pool'].map(amenity => {
             const isChecked = filters?.amenities?.some(a => a.toLowerCase().includes(amenity.toLowerCase())) || false;
             return `
-            <label style="display: flex; align-items: center; font-size: 13px; cursor: pointer;">
-              <input type="checkbox" class="amenity-checkbox" value="${amenity}" ${isChecked ? 'checked' : ''} style="margin-right: 6px; cursor: pointer;">
-              <span>${amenity}</span>
+            <label style="display: flex; align-items: center; font-size: 13px; cursor: pointer; padding: 6px 8px; border-radius: 8px; transition: all 0.2s; ${isChecked ? 'background: rgba(99, 102, 241, 0.1);' : ''}">
+              <input type="checkbox" class="amenity-checkbox" value="${amenity}" ${isChecked ? 'checked' : ''} style="margin-right: 10px; cursor: pointer; accent-color: #6366f1; width: 16px; height: 16px;">
+              <span style="color: #334155; font-weight: 500;">${amenity}</span>
             </label>
           `;
           }).join('')}
@@ -252,28 +253,28 @@ export default function MapContainer({
     
     map.controls[google.maps.ControlPosition.TOP_RIGHT].push(amenitiesControlDiv);
 
-    // Add walking time legend
+    // Add walking time legend - Modern design
     const legendDiv = document.createElement('div');
-    legendDiv.style.cssText = 'margin: 10px; padding: 0;';
+    legendDiv.style.cssText = 'margin: 12px; padding: 0;';
     legendDiv.innerHTML = `
-      <div style="background: white; padding: 12px; border-radius: 8px; box-shadow: 0 2px 6px rgba(0,0,0,0.3); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 200px;">
-        <div style="font-size: 14px; font-weight: 600; margin-bottom: 8px; color: #374151;">Walking Time</div>
-        <div style="display: flex; flex-direction: column; gap: 6px;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <div style="width: 16px; height: 16px; border-radius: 50%; background: #34A853; border: 2px solid #34A853;"></div>
-            <span style="font-size: 12px; color: #374151;">10 min walk</span>
+      <div style="background: rgba(255, 255, 255, 0.95); backdrop-filter: blur(12px); padding: 16px; border-radius: 16px; box-shadow: 0 10px 25px rgba(0,0,0,0.1), 0 4px 10px rgba(0,0,0,0.05); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 220px; border: 1px solid rgba(226, 232, 240, 0.8);">
+        <div style="font-size: 13px; font-weight: 600; margin-bottom: 12px; color: #1e293b; letter-spacing: -0.01em;">Walking Time</div>
+        <div style="display: flex; flex-direction: column; gap: 10px;">
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="width: 18px; height: 18px; border-radius: 50%; background: #34A853; border: 2px solid #34A853; box-shadow: 0 2px 4px rgba(52, 168, 83, 0.3);"></div>
+            <span style="font-size: 12px; color: #334155; font-weight: 500;">10 min walk</span>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <div style="width: 16px; height: 16px; border-radius: 50%; background: #FBBC05; border: 2px solid #FBBC05;"></div>
-            <span style="font-size: 12px; color: #374151;">20 min walk</span>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="width: 18px; height: 18px; border-radius: 50%; background: #FBBC05; border: 2px solid #FBBC05; box-shadow: 0 2px 4px rgba(251, 188, 5, 0.3);"></div>
+            <span style="font-size: 12px; color: #334155; font-weight: 500;">20 min walk</span>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <div style="width: 16px; height: 16px; border-radius: 50%; background: #EA4335; border: 2px solid #EA4335;"></div>
-            <span style="font-size: 12px; color: #374151;">30 min walk</span>
+          <div style="display: flex; align-items: center; gap: 10px;">
+            <div style="width: 18px; height: 18px; border-radius: 50%; background: #EA4335; border: 2px solid #EA4335; box-shadow: 0 2px 4px rgba(234, 67, 53, 0.3);"></div>
+            <span style="font-size: 12px; color: #334155; font-weight: 500;">30 min walk</span>
           </div>
         </div>
-        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid #e5e7eb;">
-          <div style="font-size: 11px; color: #6b7280; line-height: 1.4;">
+        <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid rgba(226, 232, 240, 0.8);">
+          <div style="font-size: 11px; color: #64748b; line-height: 1.5; font-weight: 500;">
             Circles show walking distance from Wharton School
           </div>
         </div>
