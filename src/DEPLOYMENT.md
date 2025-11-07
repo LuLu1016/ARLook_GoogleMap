@@ -25,7 +25,8 @@ vercel --prod
 ### Option 3: Script
 
 ```bash
-./deploy-to-vercel.sh
+cd src
+./deploy.sh
 ```
 
 ## Pre-Deployment Checklist

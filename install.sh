@@ -110,23 +110,47 @@ NPM_VERSION=$($NPM_CMD --version)
 print_success "npm is installed: v$NPM_VERSION ($NPM_CMD)"
 echo ""
 
-# Check if src directory exists
-if [ ! -d "src" ]; then
-    print_error "src/ directory not found!"
-    echo "Please run this script from the project root directory."
+# Determine script location and project root
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Check if script is at root or in src/
+if [ -f "$SCRIPT_DIR/src/package.json" ]; then
+    # Script is at root, src/ is subdirectory
+    PROJECT_ROOT="$SCRIPT_DIR"
+    SRC_DIR="$SCRIPT_DIR/src"
+elif [ -f "$SCRIPT_DIR/package.json" ] && [ "$(basename "$SCRIPT_DIR")" = "src" ]; then
+    # Script is in src/, project root is parent
+    SRC_DIR="$SCRIPT_DIR"
+    PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+elif [ -f "$SCRIPT_DIR/package.json" ]; then
+    # Check if this package.json has Next.js (it's the real one)
+    if grep -q '"next"' "$SCRIPT_DIR/package.json" 2>/dev/null; then
+        SRC_DIR="$SCRIPT_DIR"
+        PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+    else
+        # Root package.json, look for src/
+        PROJECT_ROOT="$SCRIPT_DIR"
+        SRC_DIR="$SCRIPT_DIR/src"
+    fi
+else
+    print_error "Cannot determine project structure!"
+    echo "Please ensure src/package.json exists"
+    exit 1
+fi
+
+# Verify src directory exists
+if [ ! -d "$SRC_DIR" ] || [ ! -f "$SRC_DIR/package.json" ]; then
+    print_error "src/ directory or package.json not found!"
+    echo "Expected: $SRC_DIR/package.json"
     exit 1
 fi
 
 # Install npm dependencies
 echo "📦 Installing npm packages..."
+echo "📍 Installing in: $SRC_DIR"
 echo ""
 
-cd src
-
-if [ ! -f "package.json" ]; then
-    print_error "package.json not found in src/ directory!"
-    exit 1
-fi
+cd "$SRC_DIR"
 
 print_info "Running: $NPM_CMD install"
 echo ""
@@ -141,7 +165,7 @@ fi
 echo ""
 
 # Check if .env.local exists
-cd ..
+cd "$PROJECT_ROOT"
 if [ ! -f ".env.local" ]; then
     print_warning ".env.local file not found!"
     echo ""
@@ -151,7 +175,7 @@ if [ ! -f ".env.local" ]; then
         cp .env.example .env.local
         
         # Also copy to src directory
-        cp .env.local src/.env.local
+        cp .env.local "$SRC_DIR/.env.local"
         
         print_success ".env.local created!"
         print_warning "Please edit .env.local and add your API keys:"
@@ -164,8 +188,8 @@ else
     print_success ".env.local file exists"
     
     # Ensure it's also in src directory
-    if [ ! -f "src/.env.local" ]; then
-        cp .env.local src/.env.local
+    if [ ! -f "$SRC_DIR/.env.local" ]; then
+        cp .env.local "$SRC_DIR/.env.local"
         print_info "Copied .env.local to src/ directory"
     fi
 fi

@@ -37,10 +37,6 @@ Complete guide to get ARLook running locally.
 
 Edit `.env.local` (in root and `src/` directories):
 
-```bash
-NEXT_PUBLIC_GOOGLE_MAPS_API_KEY=your_google_maps_key_here
-OPENAI_API_KEY=your_openai_key_here
-```
 
 ## Running the Application
 

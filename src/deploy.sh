@@ -1,37 +1,102 @@
 #!/bin/bash
+set -e
 
-# 快速部署脚本 - Vercel
-# 使用方法: ./deploy.sh
+# ARLook RAG - Vercel Deployment Script
+# Usage: ./deploy.sh
+# 
+# This script handles:
+# - Vercel CLI installation and login
+# - Project linking
+# - Environment variable setup (optional)
+# - Production deployment
 
-echo "🚀 ARLook RAG - 快速部署到 Vercel"
+echo "🚀 ARLook RAG - Deploy to Vercel"
 echo "=================================="
 echo ""
 
-# 检查是否已安装 Vercel CLI
+# Check if Vercel CLI is installed
 if ! command -v vercel &> /dev/null; then
-    echo "📦 安装 Vercel CLI..."
+    echo "📦 Installing Vercel CLI..."
     npm install -g vercel
 fi
 
-# 检查是否已登录
-echo "🔐 检查 Vercel 登录状态..."
+# Check login status
+echo "🔐 Checking Vercel login status..."
 if ! vercel whoami &> /dev/null; then
-    echo "请先登录 Vercel..."
+    echo "⚠️  Not logged in, please login..."
     vercel login
 fi
 
-# 部署
+# Show current user
 echo ""
-echo "📤 开始部署..."
-vercel --prod
+echo "✅ Logged in as: $(vercel whoami)"
+echo ""
+
+# Check if project is linked
+if [ ! -f .vercel/project.json ]; then
+    echo "📎 Linking project to Vercel..."
+    vercel link --yes
+fi
+
+# Check environment variables
+echo ""
+echo "📋 Checking environment variables..."
+if [ ! -f .env.local ]; then
+    echo "⚠️  Warning: .env.local file not found"
+    echo "   You can still deploy, but make sure to set environment variables in Vercel Dashboard"
+    echo ""
+else
+    # Check if required env vars exist
+    if grep -q "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY" .env.local && grep -q "OPENAI_API_KEY" .env.local; then
+        echo "✅ Environment variables found in .env.local"
+        echo "   - NEXT_PUBLIC_GOOGLE_MAPS_API_KEY: ✓"
+        echo "   - OPENAI_API_KEY: ✓"
+        echo ""
+        
+        # Ask if user wants to upload env vars
+        read -p "Upload environment variables to Vercel? (y/n): " -n 1 -r
+        echo ""
+        
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo "📝 Setting environment variables in Vercel..."
+            
+            # Read and set Google Maps API Key
+            GOOGLE_KEY=$(grep "NEXT_PUBLIC_GOOGLE_MAPS_API_KEY" .env.local | cut -d '=' -f2 | tr -d ' ' | tr -d '"' | head -1)
+            if [ ! -z "$GOOGLE_KEY" ]; then
+                echo "   Setting NEXT_PUBLIC_GOOGLE_MAPS_API_KEY..."
+                echo "$GOOGLE_KEY" | vercel env add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY production 2>/dev/null || true
+                echo "$GOOGLE_KEY" | vercel env add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY preview 2>/dev/null || true
+                echo "$GOOGLE_KEY" | vercel env add NEXT_PUBLIC_GOOGLE_MAPS_API_KEY development 2>/dev/null || true
+            fi
+            
+            # Read and set OpenAI API Key
+            OPENAI_KEY=$(grep "OPENAI_API_KEY" .env.local | cut -d '=' -f2 | tr -d ' ' | tr -d '"' | head -1)
+            if [ ! -z "$OPENAI_KEY" ]; then
+                echo "   Setting OPENAI_API_KEY..."
+                echo "$OPENAI_KEY" | vercel env add OPENAI_API_KEY production 2>/dev/null || true
+                echo "$OPENAI_KEY" | vercel env add OPENAI_API_KEY preview 2>/dev/null || true
+                echo "$OPENAI_KEY" | vercel env add OPENAI_API_KEY development 2>/dev/null || true
+            fi
+            
+            echo ""
+        fi
+    else
+        echo "⚠️  Warning: Required environment variables not found in .env.local"
+        echo "   Make sure to set them in Vercel Dashboard after deployment"
+        echo ""
+    fi
+fi
+
+# Deploy to production
+echo "🚀 Deploying to production..."
+vercel --prod --yes
 
 echo ""
-echo "✅ 部署完成！"
+echo "✅ Deployment complete!"
 echo ""
-echo "⚠️  重要提醒："
-echo "1. 在 Vercel Dashboard 设置环境变量："
-echo "   - GOOGLE_MAPS_API_KEY"
-echo "   - OPENAI_API_KEY"
-echo "2. 更新 Google Maps API 的 HTTP referrers 限制"
-echo "3. 访问你的网站测试功能"
+echo "📝 Next steps:"
+echo "1. Visit Vercel Dashboard to view deployment status"
+echo "2. Click 'Visit' in Deployments page to get your site URL"
+echo "3. Update Google Maps API restrictions (add *.vercel.app)"
+echo "4. Test your site functionality"
 echo ""

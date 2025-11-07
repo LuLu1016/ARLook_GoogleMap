@@ -29,7 +29,15 @@ NODE_DIR=$(dirname "$NODE_CMD")
 export PATH="$NODE_DIR:$PATH"
 
 # Change to src directory
-cd "$(dirname "$0")/src" || exit 1
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SRC_DIR="$SCRIPT_DIR/src"
+
+if [ ! -d "$SRC_DIR" ]; then
+    echo "❌ src/ directory not found!"
+    exit 1
+fi
+
+cd "$SRC_DIR" || exit 1
 
 # Start the dev server
 echo "🚀 Starting development server..."
