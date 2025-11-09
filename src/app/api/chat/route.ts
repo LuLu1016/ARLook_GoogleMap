@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import OpenAI from 'openai';
 import { Property, Message } from '@/shared/types';
+import { filterPropertiesByMessage } from '@/shared/constants/properties';
 import {
   formatPropertiesForPrompt,
   parseAIResponse,
@@ -11,6 +12,11 @@ import { getAllProperties } from '@/server/utils/csv-loader';
 import { verifyAndFilterProperties, RAGMetrics } from '@/server/services/rag/verification';
 import { RentalReasoningEngine, SearchContext } from '@/server/services/rag/reasoning';
 import { ContextAwareAssistant } from '@/server/utils/context-aware';
+import {
+  performWebSearch,
+  WebSearchResult,
+  WebSearchResponse,
+} from '@/server/services/search/web-search';
 
 /**
  * Get OpenAI API key from environment variables
@@ -23,11 +29,48 @@ function getOpenAIApiKey(): string {
   return apiKey;
 }
 
+function formatWebResultsForPrompt(results: WebSearchResult[]): string {
+  if (!results || results.length === 0) {
+    return 'No live web search results were available for this query. Focus on the verified property database while providing general guidance based on known market patterns.';
+  }
+
+  return results
+    .map((result, index) => {
+      const normalizedSnippet = result.snippet
+        ? result.snippet.replace(/\s+/g, ' ').trim()
+        : 'No summary available.';
+
+      const hostname = extractHostname(result.url);
+      const sourceLabel = result.source ?? hostname ?? 'Unknown source';
+
+      return `${index + 1}. ${result.title}
+   Source: ${sourceLabel}
+   URL: ${result.url}
+   Summary: ${normalizedSnippet}`;
+    })
+    .join('\n\n');
+}
+
+function extractHostname(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  try {
+    const { hostname } = new URL(url);
+    return hostname.replace(/^www\./, '');
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Create system prompt for OpenAI with intent detection and next-step suggestions
  */
-function createSystemPrompt(properties: Property[], conversationHistory: Message[] = []): string {
+function createSystemPrompt(
+  properties: Property[],
+  conversationHistory: Message[] = [],
+  webResults: WebSearchResult[] = []
+): string {
   const propertiesText = formatPropertiesForPrompt(properties);
+  const webResultsText = formatWebResultsForPrompt(webResults);
   
   // Analyze conversation context
   const hasPreviousMessages = conversationHistory.length > 0;
@@ -74,6 +117,9 @@ function createSystemPrompt(properties: Property[], conversationHistory: Message
 ### Property Database
 ${propertiesText}
 
+### Real-Time Market Insights
+${webResultsText}
+
 ### Conversation Context
 Current Stage: ${conversationStage}
 Detected Intent: ${detectedIntent}
@@ -85,6 +131,7 @@ ${hasPreviousMessages ? `Previous messages: ${conversationHistory.slice(-3).map(
 2. **Intelligent Matching**: Filter and rank properties from the database based on user needs
 3. **Proactive Guidance**: Anticipate user's next steps and provide helpful suggestions
 4. **Conversation Flow**: Guide users through a natural conversation journey from initial search to final decision
+5. **Live Insights**: Incorporate relevant insights from real-time search results (cite the source by name), but never fabricate property details that are not verified in the database.
 
 ### Response Structure (present naturally, no format markers)
 Your response MUST be complete and include ALL of the following:
@@ -122,7 +169,10 @@ Your response MUST be complete and include ALL of the following:
    
    DO NOT end your response abruptly. Always include next-step suggestions.
 
-4. **Data Tag**: At the very end, on a separate line, add JSON filter format (DO NOT mention this in your response):
+4. **Live Market Context**:
+   When helpful, incorporate insights from the Real-Time Market Insights section to enrich your guidance (e.g., neighborhood safety, market trends). Always attribute the insight to the source name provided. Do NOT invent property-level details from these sources—use them only for general context.
+
+5. **Data Tag**: At the very end, on a separate line, add JSON filter format (DO NOT mention this in your response):
 [DATA]{"filters": {"maxPrice": 2000, "amenities": ["In-unit laundry", "Gym"], "maxWalkingDistance": 10}}
 
 ### Response Length Requirements
@@ -149,6 +199,7 @@ Before ending your response, verify:
 - Be professional, friendly, and eager to help
 - If user needs are unclear, politely ask about key information (budget, room type, must-have amenities)
 - Always end with helpful next-step suggestions or questions
+- When using live insights, cite the source in natural language (e.g., "According to PhillyRentalWatch, ...")
 
 ### Critical Rules - Prevent Hallucinations
 - **Strict Constraint**: You can ONLY reference properties listed in the database above. NEVER invent or fabricate property information.
@@ -224,10 +275,20 @@ export async function POST(request: NextRequest) {
     // Step 3: Select search strategy
     const searchStrategy = await reasoningEngine.selectSearchStrategy(clarifiedQuery);
     
-    // Step 4: Use HybridRetriever to perform RAG retrieval
+    // Step 4: Use HybridRetriever to perform RAG retrieval and run real-time web search in parallel
     const retriever = new HybridRetriever();
     const allProperties = getAllProperties();
-    const retrievalResult = await retriever.retrieve(clarifiedQuery, allProperties, openai);
+    const [retrievalResult, webSearchResponse] = await Promise.all([
+      retriever.retrieve(clarifiedQuery, allProperties, openai),
+      performWebSearch(clarifiedQuery).catch((error: any) => {
+        const message =
+          error instanceof Error ? error.message : 'Unknown error performing web search';
+        console.error('Web search failed:', message);
+        return { results: [], source: 'error', error: message } as WebSearchResponse;
+      }),
+    ]);
+
+    const webSearchResults = webSearchResponse.results ?? [];
     
     console.log('RAG Retrieval Result:', {
       strategy: retrievalResult.strategy,
@@ -236,13 +297,34 @@ export async function POST(request: NextRequest) {
       searchStrategy,
     });
 
+    if (webSearchResponse.error) {
+      console.warn('Web Search Failed:', {
+        source: webSearchResponse.source,
+        error: webSearchResponse.error,
+      });
+    } else {
+      console.log('Web Search Completed:', {
+        source: webSearchResponse.source,
+        resultCount: webSearchResults.length,
+        topResults: webSearchResults.slice(0, 3).map(result => ({
+          title: result.title,
+          source: result.source,
+          url: result.url,
+        })),
+      });
+    }
+
     // Step 5: Prepare conversation messages with retrieved properties
     // Use retrieved properties instead of all properties for better context
     const retrievedProperties = retrievalResult.properties.length > 0 
       ? retrievalResult.properties 
       : allProperties; // Fallback to all if retrieval returns empty
     
-    const systemPrompt = createSystemPrompt(retrievedProperties, conversationHistory || []);
+    const systemPrompt = createSystemPrompt(
+      retrievedProperties,
+      conversationHistory || [],
+      webSearchResults
+    );
     const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
       {
         role: 'system',
@@ -550,6 +632,9 @@ export async function POST(request: NextRequest) {
       verified_properties: verificationResult.verifiedProperties,
       search_strategy: retrievalResult.strategy,
       confidence: retrievalResult.confidence,
+      web_search_results: webSearchResults,
+      web_search_source: webSearchResponse.source,
+      web_search_error: webSearchResponse.error,
       // RAG Performance metrics
       rag_metrics: verificationResult.metrics,
     });
@@ -566,7 +651,6 @@ export async function POST(request: NextRequest) {
  * Fallback function when OpenAI is not available
  */
 async function fallbackToLocalFiltering(message: string) {
-  const { filterPropertiesByMessage } = require('@/lib/properties');
   const allProperties = getAllProperties();
   const filteredProperties = filterPropertiesByMessage(message, allProperties);
 
@@ -589,7 +673,34 @@ async function fallbackToLocalFiltering(message: string) {
 
   // Use HybridRetriever for fallback as well
   const retriever = new HybridRetriever();
-  const retrievalResult = await retriever.retrieve(message, allProperties);
+  const [retrievalResult, webSearchResponse] = await Promise.all([
+    retriever.retrieve(message, allProperties),
+    performWebSearch(message).catch((error: any) => {
+      const message =
+        error instanceof Error ? error.message : 'Unknown error performing web search';
+      console.error('Web search failed (fallback path):', message);
+      return { results: [], source: 'error', error: message } as WebSearchResponse;
+    }),
+  ]);
+
+  const webSearchResults = webSearchResponse.results ?? [];
+
+  if (webSearchResponse.error) {
+    console.warn('Web Search Failed (fallback path):', {
+      source: webSearchResponse.source,
+      error: webSearchResponse.error,
+    });
+  } else {
+    console.log('Web Search Completed (fallback path):', {
+      source: webSearchResponse.source,
+      resultCount: webSearchResults.length,
+      topResults: webSearchResults.slice(0, 3).map(result => ({
+        title: result.title,
+        source: result.source,
+        url: result.url,
+      })),
+    });
+  }
 
   return NextResponse.json({
     response: responseMessage,
@@ -599,5 +710,8 @@ async function fallbackToLocalFiltering(message: string) {
     retrieved_properties: retrievalResult.properties,
     search_strategy: retrievalResult.strategy,
     confidence: retrievalResult.confidence,
+    web_search_results: webSearchResults,
+    web_search_source: webSearchResponse.source,
+    web_search_error: webSearchResponse.error,
   });
 }
